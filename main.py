@@ -1,9 +1,9 @@
 import pyxel as px
-from os.path import realpath
+from os.path import realpath, dirname, join
 from ressources.outils import *
 from typing import Literal
 
-CHEMIN_RES = f"{realpath("./ressources")}/"
+CHEMIN_RES = f"{join(realpath(dirname(__file__)), "ressources")}/"
 
 CHEK_TOUCHES: Touches
 
@@ -30,6 +30,8 @@ class Jeu():
         CHEK_TOUCHES = Touches(GAUCHE, DROITE, HAUT, BAS)
 
         self.perso = Perso()
+
+        self.perso.placer_perso(y= 50)
         
         px.run(self.update, self.draw) # Lance la fenètre de jeu
 
@@ -45,11 +47,11 @@ class Jeu():
         """
         Cette fonction va contenir toutes les commandes pour dessiner l'écran de jeu.
         """
-        px.cls(1)
+        px.cls(0)
         self.perso.draw()
  
 class Perso():
-    def __init__(self) -> None:
+    def __init__(self, vitesse:int = 10) -> None:
         px.load(f"{CHEMIN_RES}perso.pyxres")
         self.img = px.images[0]
 
@@ -60,14 +62,18 @@ class Perso():
         self.hitbox_y = 8
         self._dep_x = 0
         self._dep_y = 0
-        self._LIMITE = FPS//3
+        self._REG_VITESSE = vitesse # Réglage de la vitesse: à modifier en fonction de la taille finale
+                                # de la fenètre et de la sensation de vitesse souhaité.
+        self._LIMITE = (FPS//3) * 100
 
         self.delay_vitesse = 0
         self.tps_v_max = 5 * FPS
         self._REGULATEUR = FPS // 2
         self.essouflement = 3
         self.derapage = 0
-        self._LIMITE_DERAPAGE = FPS // 6
+        self.derap_sens = 0
+        self._LIMITE_DERAPAGE_D = 2 * FPS // 3
+        self._LIMITE_DERAPAGE = FPS // 4
         self._tps_stase = 0
 
         self.etat_perso: Literal["Stase", "Mvt", "Derapage"] = "Stase"
@@ -78,52 +84,67 @@ class Perso():
         self._block_mouv = False
         self._block_draw = False
 
-    def placer_perso(self, x:int = 0, y:int = 0):
+    def placer_perso(self, x:int = 8, y:int = 8):
         """
         Place le personnage a un endroit spécifique du jeu. 
 
-        :param x: Les coordonnées x du coin en haut à droite du perso.
+        :param x: Les coordonnées x du millieu du perso.
         :type x: int
-        :param y: Les coordonnées y du coin en haut à droite du perso.
+        :param y: Les coordonnées y du milieu du perso.
         :type y: int
         """
-        self.x = x
-        self.y = y
-        self.hitbox_x = x + 8
-        self.hitbox_y = y + 8
+        self.x = x - 8
+        self.y = y - 8
+        self.hitbox_x = x
+        self.hitbox_y = y
 
     def update(self):
+        """
+        Fonction à éxécuter chaque frame pour faire fonctionner le perso.
+        """
+        self.mouvements_complets()
+
+    def mouvements_complets(self):
+        """
+        Fonction qui gère tout les déplacements.
+        """
         etat_touches = CHEK_TOUCHES(DROITE, GAUCHE, HAUT)
 
         if not self._block_mouv:
-            acceleration = self.delay_vitesse // self._REGULATEUR
+            acceleration = self.delay_vitesse * 100 // self._REGULATEUR
 
-            vitesse = acceleration if acceleration else 1
-
-            augmentation_v = None
+            vitesse = acceleration * self._REG_VITESSE
             
+            # Vérifie si il y à eu un mouvement.
             if (etat_touches[DROITE] and etat_touches[GAUCHE] or 
                 not etat_touches[DROITE] and not etat_touches[GAUCHE]):
-                self.etat_perso = "Stase"
-                augmentation_v = False
-                self._tps_stase += 1
-            elif etat_touches[DROITE]:
-                augmentation_v = True
-                self._dep_x += vitesse
-                self.etat_perso = "Mvt"
-                if self.sens == -1 and self._tps_stase < self._LIMITE_DERAPAGE:
-                    self.derapage = self._LIMITE
-                self.sens = 1
-            elif etat_touches[GAUCHE]:
-                augmentation_v = True
-                self._dep_x -= vitesse
-                self.etat_perso = "Mvt"
-                if self.sens == 1 and self._tps_stase < self._LIMITE_DERAPAGE:
-                    self.derapage = self._LIMITE
-                self.sens = -1
+                self.etat_perso = "Stase" # Définit l'état de l'animation en Stase.
+                augmentation_v = False # Arrète l'augmentation de la vitesse.
+                self._tps_stase += 1 # Met à jour le tps depuis le dernier mouvement.
+            else:
+                sens_mvt = 1 if etat_touches[DROITE] else -1 #Définit le sens du mouvement enregistré cette frame.
+                augmentation_v = True #Déclenchement de l'accélération de cette frame.
+                self.etat_perso = "Mvt" #Définit l'etat de l'animation du perso en mouvement.
+
+                #Vérifie si on se trouve dans une situation de dérapage:
+                #   - le dernier sens enregistré est le sens contraire;
+                #   - le tps depuis le dernier mouvement est assez cour;
+                #   - le dérapage ne se superpose pas à un autre.
+                if self.sens != sens_mvt and self._tps_stase < self._LIMITE_DERAPAGE and self.derapage == 0:
+                    self.derapage = self._LIMITE_DERAPAGE_D #Commence le dérapage.
+                    self.derap_sens = sens_mvt
+
+                self._tps_stase = 0 # Réinitialise le compteur du tps dans l'état Stase.
+
+                self.sens = sens_mvt # Définit le sens du perso.
+                if not self.derapage: # Si le perso ne dérape pas.
+                    self._dep_x += vitesse * self.sens # Fait avancer le personnage.
 
             if self.derapage > 0:
                 self.derapage -= 1
+                self.delay_vitesse -= 2 if self.delay_vitesse > 0 else 0
+                decallage_derapage = self.derapage * vitesse // (FPS // 30 * 20)
+                self._dep_x -= decallage_derapage * self.derap_sens
                 self.etat_perso = "Derapage"
                 
             while abs(self._dep_x) >= self._LIMITE:
@@ -153,4 +174,4 @@ class Perso():
             else:
                 self.etat_anim += 1
 
-Jeu("Test")
+Jeu("Test", 500, 100, 60)
